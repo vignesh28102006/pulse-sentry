@@ -1,0 +1,91 @@
+# Render Blueprint: one click creates the database and the three services (all on free plans).
+# Render dashboard -> New -> Blueprint -> pick this repository.
+# After the first deploy, fill in the three *_URL variables marked "sync: false" (see README "Deploy to Render").
+
+databases:
+  - name: pulsesentry-db
+    plan: free
+    databaseName: pulsesentry
+    user: pulsesentry
+
+services:
+  # Backend API + WebSocket + the built dashboard (one public URL for everything users see)
+  - type: web
+    name: pulsesentry-app
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: node apps/backend/src/db/migrate.js && node apps/backend/src/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pulsesentry-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DEVICE_API_KEY
+        generateValue: true
+      - key: SIMULATOR_CONTROL_TOKEN
+        generateValue: true
+      - key: REDIS_URL
+        value: ""
+      - key: RISK_ENGINE_URL # e.g. https://pulsesentry-risk.onrender.com
+        sync: false
+      - key: SIMULATOR_URL # e.g. https://pulsesentry-simulator.onrender.com
+        sync: false
+      - key: VITE_HUB_URL # same as SIMULATOR_URL (used at build time for the "home hub screen" link)
+        sync: false
+      - key: DASHBOARD_URL # this service's own URL, used in phone alerts
+        sync: false
+      - key: RISK_ENGINE_TIMEOUT_MS
+        value: "10000"
+      - key: OFFLINE_GRACE_SECONDS
+        value: "120"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+
+  # Explainable risk engine (Python / FastAPI)
+  - type: web
+    name: pulsesentry-risk
+    runtime: python
+    plan: free
+    rootDir: apps/risk-engine
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+
+  # Sensor simulator + home hub screen
+  - type: web
+    name: pulsesentry-simulator
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev
+    startCommand: node apps/sensor-simulator/src/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DEVICE_API_KEY
+        fromService:
+          type: web
+          name: pulsesentry-app
+          envVarKey: DEVICE_API_KEY
+      - key: SIMULATOR_CONTROL_TOKEN
+        fromService:
+          type: web
+          name: pulsesentry-app
+          envVarKey: SIMULATOR_CONTROL_TOKEN
+      - key: BACKEND_URL # the pulsesentry-app URL
+        sync: false
+      - key: DEMO_START # everyone starts NORMAL; visitors drive the demo themselves
+        value: calm
